@@ -1,0 +1,47 @@
+
+temp
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+*.log
+
+# Virtual env
+.env
+.venv/
+env/
+venv/
+ENV/
+
+# IDE / Editors
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Playwright / Browsers
+playwright/.cache/
+playwright/.local-browsers/
+
+# Logs
+*.log
+logs/
+*.out
+
+# Coverage / Testing
+htmlcov/
+.coverage
+.cache/
+.pytest_cache/
+
+# Build / Dist
+dist/
+build/
+*.spec

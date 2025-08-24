@@ -1,0 +1,38 @@
+app:
+  name: Property Analysis Agentic System
+  version: 1.0.0
+  default_city: Los Angeles
+  response_timeout_sec: 110
+
+agents:
+  framework: crewai
+
+integrations:
+  llm:
+    provider: openrouter
+    model: deepseek/deepseek-chat-v3-0324:free   # אפשר להשאיר, או להחליף למודל זריז יותר שיש לך
+    temperature: 0.2
+    max_tokens: 700                               # ↓ מצומצם כדי לקצר זמן תגובה
+    base_url: https://openrouter.ai/api/v1/chat/completions
+    request_timeout_sec: 90                       # ↑ טיימאאוט נדיב יותר
+    fallback_models:
+      - openrouter/auto                           # פולבק אם המודל העיקרי עמוס
+
+
+  search:
+    provider: tavily
+    base_url: https://api.tavily.com/search
+    max_results: 6
+    include_answer: false
+    include_images: false
+    request_timeout_sec: 30
+
+report:
+  sections:
+    - Summary
+    - Parcel & Zoning
+    - Permits & History
+    - Constraints & Overlays
+    - Development Potential
+    - Risks & Red Flags
+    - Sources
