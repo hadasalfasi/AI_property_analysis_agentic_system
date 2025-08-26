@@ -1,10 +1,13 @@
 
+# חוזר טוב אבל כגוש ולא שורה שורה השארתי התכתבות אחרונה עם גיפיטי
+
 from typing import Dict, List, Optional
 from loguru import logger
 from langsmith import traceable
 from app.search_integration import tavily_search
 
 from playwright.sync_api import sync_playwright, Page, Locator
+from bs4 import BeautifulSoup  # <<< חשוב: המרת HTML לטקסט
 import re
 import os
 import time
@@ -24,9 +27,10 @@ def _print_panel(title: str, content: Optional[str]) -> None:
     print(f"\n===== PANEL: {title} =====")
     if not content:
         print("[EMPTY]")
+        print("===== END PANEL =====\n")
         return
     # הדפסה עם הגבלה ידידותית — גם לפי תווים וגם לפי שורות
-    text = content.strip()
+    text = (content or "").strip()
     if len(text) > PANEL_PRINT_MAX_CHARS:
         text = text[:PANEL_PRINT_MAX_CHARS] + "\n... [truncated]"
     lines = text.splitlines()
@@ -34,6 +38,13 @@ def _print_panel(title: str, content: Optional[str]) -> None:
         text = "\n".join(lines[:PANEL_PRINT_MAX_LINES]) + "\n... [truncated]"
     print(text)
     print("===== END PANEL =====\n")
+
+# ========= נרמול טקסטים =========
+def _norm(s: str) -> str:
+    s = (s or "").replace("\u00A0", " ")
+    s = " ".join(s.split())
+    s = re.sub(r"\s*/\s*", "/", s)
+    return s.strip()
 
 # ========= דיאגנוסטיקה: רשימת טאבים =========
 def _list_available_tabs(page: Page) -> List[str]:
@@ -47,13 +58,6 @@ def _list_available_tabs(page: Page) -> List[str]:
     logger.info(f"[TABS] {cleaned}")
     print(f"[TABS] {cleaned}")
     return cleaned
-
-# ========= נרמול טקסטים =========
-def _norm(s: str) -> str:
-    s = s.replace("\u00A0", " ")
-    s = " ".join(s.split())
-    s = re.sub(r"\s*/\s*", "/", s)
-    return s.strip()
 
 # ========= אליאסים =========
 TAB_ALIASES = {
@@ -102,7 +106,75 @@ def _find_tab_locator(page: Page, canonical_name: str) -> Optional[Locator]:
                 return el
     return None
 
+# ========= המרות HTML -> טקסט נקי =========
+
+def _table_to_lines(table: BeautifulSoup) -> List[str]:
+    """
+    ממיר טבלת HTML לשורות 'Label: Value'. עובד לטאב Address / Legal.
+    """
+    out: List[str] = []
+    rows = table.find_all("tr")
+    for tr in rows:
+        tds = tr.find_all("td")
+        if len(tds) >= 2:
+            label = _norm(tds[0].get_text(" ", strip=True))
+            value = _norm(tds[1].get_text(" ", strip=True))
+            if label or value:
+                out.append(f"{label}: {value}")
+        else:
+            txt = _norm(tr.get_text(" ", strip=True))
+            if txt:
+                out.append(txt)
+    return out
+
+def _html_to_text(html: str) -> str:
+    """
+    ממיר HTML לטקסט קריא עם שורות חדשות.
+    """
+    if not html:
+        return ""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # להמיר <br> לשורה חדשה
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+
+    # אם יש טבלאות — לפרק שורה-שורה
+    tables = soup.find_all("table")
+    if tables:
+        lines: List[str] = []
+        for tb in tables:
+            lines.extend(_table_to_lines(tb))
+        return "\n".join(lines)
+
+    # אחרת — נשתמש ב־get_text עם מפרידי שורות
+    text = soup.get_text("\n", strip=True)
+    # ניקוי רווחים כפולים ושבירות מיותרות
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+def _clean_panel_text(value: Optional[str]) -> Optional[str]:
+    """
+    מקבלת מחרוזת (טקסט או HTML) ומחזירה טקסט נקי עם שורות מסודרות.
+    """
+    if not value:
+        return None
+    v = value.strip()
+    if "<" in v and ">" in v:
+        try:
+            return _html_to_text(v)
+        except Exception:
+            return _norm(v)
+    return _norm(v)
+
+
+# ========= שליפת תוכן טאב =========
+
 def _open_tab_and_get_content(page: Page, tab_text: str, timeout: int = 60000) -> Optional[str]:
+    """
+    מחזיר תמיד טקסט נקי (אם אפשר).
+    קודם מנסה inner_text; אם ריק — מנסה inner_html ואז ממיר ל־text.
+    """
     t0 = time.time()
     anchor = _find_tab_locator(page, tab_text)
     if anchor is None or anchor.count() == 0:
@@ -116,7 +188,7 @@ def _open_tab_and_get_content(page: Page, tab_text: str, timeout: int = 60000) -
     except Exception:
         pass
 
-    # לפתוח אם סגור (twist_closed) או "לנגן" קליק עדין
+    # לפתוח אם סגור (twist_closed) או "לנגוע" בקליק
     icon = anchor.locator("img").first
     try:
         src = icon.get_attribute("src") or ""
@@ -142,29 +214,35 @@ def _open_tab_and_get_content(page: Page, tab_text: str, timeout: int = 60000) -
         return None
 
     try:
-        txt = content_tr.inner_text(timeout=timeout).strip()
-        if txt:
+        # 1) ננסה טקסט נקי
+        raw_text = (content_tr.inner_text(timeout=timeout) or "").strip()
+        if raw_text:
             dt = time.time() - t0
             logger.info(f"[PANEL] {tab_text}: extracted=True in {dt:.2f}s")
             print(f"[PANEL] {tab_text}: OK in {dt:.2f}s")
-            return txt
-        html = content_tr.inner_html(timeout=timeout).strip()
+            return _clean_panel_text(raw_text)
+
+        # 2) אם אין טקסט — ננסה HTML ונמיר לטקסט נקי
+        raw_html = (content_tr.inner_html(timeout=timeout) or "").strip()
         dt = time.time() - t0
-        logger.info(f"[PANEL] {tab_text}: extracted={'True' if html else 'False'} in {dt:.2f}s | preview: {html[:160] if html else ''}")
-        print(f"[PANEL] {tab_text}: {'OK' if html else 'EMPTY/None'} in {dt:.2f}s")
-        return html or None
+        logger.info(f"[PANEL] {tab_text}: extracted={'True' if raw_html else 'False'} in {dt:.2f}s | preview: {raw_html[:160] if raw_html else ''}")
+        print(f"[PANEL] {tab_text}: {'OK' if raw_html else 'EMPTY/None'} in {dt:.2f}s")
+        return _clean_panel_text(raw_html) if raw_html else None
+
     except Exception as e:
         logger.warning(f"Failed extracting content for tab {tab_text}: {e}")
         print(f"[WARN] Failed extracting content for tab {tab_text}: {e}")
         return None
+
+# ========= נקודת הכניסה לשאיבה =========
 
 @traceable(name="la_scrape")
 def scrape_la_city_planning(street_name: str, house_number: str) -> Dict:
     """
     שליפה מזימאס לפי רחוב ומספר:
     - פותח את העמוד, מאשר תנאים, מזין רחוב+מספר, ומחכה לסיידבר.
-    - שולף את הטאבים שביקשת ומדפיס לקונסול את התוכן (מלא, עם חיתוך ידידותי).
-    שימו לב: בגרסה זו ויתרנו על "Zoning בסיסי" (Base Zone/Height/FAR).
+    - שולף את הטאבים שביקשת ומחזיר/מדפיס טקסט נקי (ללא תגיות).
+    בגרסה זו ויתרנו על "Zoning בסיסי" (Base Zone/Height/FAR).
     """
     address = f"{house_number} {street_name}, Los Angeles, CA"
     logger.info(f"Scraping official sources for: {address}")
@@ -192,7 +270,7 @@ def scrape_la_city_planning(street_name: str, house_number: str) -> Dict:
         # קבלת תנאים
         page.wait_for_selector("#btn", timeout=60000)
         page.click("#btn")
-        print("[INFO] Accepted terms.")
+        print("[INFO] Accepted terms.]")
 
         # מילוי חיפוש
         logger.info(f"Filling search fields: street={street_name}, number={house_number}")
@@ -213,13 +291,13 @@ def scrape_la_city_planning(street_name: str, house_number: str) -> Dict:
         # דיאגנוסטיקה: אילו טאבים יש בפועל
         _list_available_tabs(page)
 
-        # שליפת הטאבים והדפסה מלאה
+        # שליפת הטאבים והדפסה מלאה (נקיה)
         logger.info("Extracting requested sidebar panels...")
         print("[INFO] Extracting panels...")
         for tab_name in list(panels.keys()):
             try:
                 content = _open_tab_and_get_content(page, tab_name)
-                panels[tab_name] = content
+                panels[tab_name] = content  # כבר טקסט נקי!
                 logger.info(f"Panel '{tab_name}' extracted: {bool(content)}")
                 _print_panel(tab_name, content)
             except Exception as e:
@@ -252,7 +330,8 @@ def scrape_la_city_planning(street_name: str, house_number: str) -> Dict:
     logger.info("Returning scraped data.")
     return {
         "address": address,
-        "panels": panels,          # << כאן כל הטקסטים שחולצו לכל טאב
+        "panels": panels,  # << כאן כל הטקסטים שחולצו לכל טאב — כבר נקיים מ־HTML
         "notes": "\n".join(notes_parts) or "Official scrape completed; panel values may be partial.",
         "sources": sources,
     }
+

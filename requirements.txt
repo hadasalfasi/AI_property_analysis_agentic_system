@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+streamlit
+httpx
+loguru
+python-dotenv
+playwright
+langgraph
+langsmith
+pyyaml
+pydantic

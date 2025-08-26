@@ -28,6 +28,7 @@ if st.button("Analyze", type="primary") and street_name and house_number:
             st.stop()
         st.success("Done!")
         st.json(data)
-        for sec in data.get("sections", []):
+        # for sec in data.get("sections", []):
+        for sec in (data.get("sections") or []):
             with st.expander(sec.get("title", "Section"), expanded=(sec.get("title") == "Summary")):
                 st.write(sec.get("content", ""))
