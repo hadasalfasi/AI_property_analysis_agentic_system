@@ -1,6 +1,3 @@
-
-# חוזר טוב אבל כגוש ולא שורה שורה השארתי התכתבות אחרונה עם גיפיטי
-
 from typing import Dict, List, Optional
 from loguru import logger
 from langsmith import traceable
@@ -239,15 +236,9 @@ def _open_tab_and_get_content(page: Page, tab_text: str, timeout: int = 60000) -
 @traceable(name="la_scrape")
 def scrape_la_city_planning(street_name: str, house_number: str) -> Dict:
     """
-    שליפה מזימאס לפי רחוב ומספר:
-    - פותח את העמוד, מאשר תנאים, מזין רחוב+מספר, ומחכה לסיידבר.
-    - שולף את הטאבים שביקשת ומחזיר/מדפיס טקסט נקי (ללא תגיות).
-    בגרסה זו ויתרנו על "Zoning בסיסי" (Base Zone/Height/FAR).
+    שליפה מזימאס לפי רחוב ומספר, ולאחר מכן שליחה לתבילי עם הפרומפטים הממוקדים
     """
     address = f"{house_number} {street_name}, Los Angeles, CA"
-    logger.info(f"Scraping official sources for: {address}")
-    print(f"[INFO] Scraping: {address}")
-
     panels: Dict[str, Optional[str]] = {
         "Address / Legal": None,
         "Planning and Zoning": None,
@@ -259,79 +250,47 @@ def scrape_la_city_planning(street_name: str, house_number: str) -> Dict:
 
     sources: List[Dict] = []
     notes_parts: List[str] = []
+    tavily_results = []  # הוספתי את השדה tavily_results
 
+    # חפש ב-ZIMAS
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        logger.info("Navigating to ZIMAS page...")
-        print("[INFO] Navigating to ZIMAS...")
         page.goto("https://zimas.lacity.org/", wait_until="domcontentloaded")
 
-        # קבלת תנאים
-        page.wait_for_selector("#btn", timeout=60000)
+        # קבלת תנאים והזנת רחוב ומספר
         page.click("#btn")
-        print("[INFO] Accepted terms.]")
-
-        # מילוי חיפוש
-        logger.info(f"Filling search fields: street={street_name}, number={house_number}")
-        print(f"[INFO] Fill search: street='{street_name}', number='{house_number}'")
-        page.wait_for_selector("#txtStreetName", timeout=60000)
         page.fill("#txtStreetName", street_name)
-        page.wait_for_selector("#txtHouseNumber", timeout=60000)
         page.fill("#txtHouseNumber", house_number)
-        page.wait_for_selector("#btnSearchGo", timeout=60000)
         page.click("#btnSearchGo")
-        print("[INFO] Clicked GO button.")
 
         # להמתין לסיידבר
-        t0 = time.time()
         page.wait_for_selector("#divLeftInformationBar", timeout=60000)
-        print(f"[TIMING] Initial nav + search ready in {time.time() - t0:.2f}s")
 
-        # דיאגנוסטיקה: אילו טאבים יש בפועל
-        _list_available_tabs(page)
-
-        # שליפת הטאבים והדפסה מלאה (נקיה)
-        logger.info("Extracting requested sidebar panels...")
-        print("[INFO] Extracting panels...")
+        # שליפת הטאבים
         for tab_name in list(panels.keys()):
-            try:
-                content = _open_tab_and_get_content(page, tab_name)
-                panels[tab_name] = content  # כבר טקסט נקי!
-                logger.info(f"Panel '{tab_name}' extracted: {bool(content)}")
-                _print_panel(tab_name, content)
-            except Exception as e:
-                logger.warning(f"Failed extracting panel '{tab_name}': {e}")
-                print(f"[WARN] Failed extracting panel '{tab_name}': {e}")
-                panels[tab_name] = None
+            content = _open_tab_and_get_content(page, tab_name)
+            panels[tab_name] = content  # טקסט נקי
 
         sources.append({"name": "ZIMAS", "url": "https://zimas.lacity.org/"})
         browser.close()
 
-    # אופציונלי: הקשר חיצוני
+    # חיפוש נוסף ב-Tavily
     try:
         logger.info("Performing Tavily search for additional context.")
-        print("[INFO] Tavily: searching for extra context…")
         search_results = tavily_search(address) or []
-        print(f"[INFO] Tavily results: {len(search_results)}")
-        for idx, result in enumerate(search_results[:6], 1):
-            if result.get("title") and result.get("content"):
-                clip = (result["content"] or "").strip()
-                if len(clip) > 300:
-                    clip = clip[:300] + "…"
-                print(f"[NOTE {idx}] {clip}")
-                notes_parts.append(result["content"])
-        sources.append({"name": "TAVILY", "url": "https://tavily.com"})
+        for result in search_results:
+            tavily_results.append(result)  # שמור את תוצאות Tavily בשדה tavily_results
+        # sources.append({"name": "TAVILY", "url": "https://tavily.com"})
     except Exception as e:
         logger.warning(f"Tavily search failed: {e}")
-        print(f"[WARN] Tavily search failed: {e}")
-
-    print("[TIMING] scrape_la_city_planning done.")
-    logger.info("Returning scraped data.")
+    print(tavily_results)
+    print("+++++++++++++++++++++++++")
     return {
         "address": address,
-        "panels": panels,  # << כאן כל הטקסטים שחולצו לכל טאב — כבר נקיים מ־HTML
-        "notes": "\n".join(notes_parts) or "Official scrape completed; panel values may be partial.",
+        "panels": panels,  # הטקסטים מכל הטאבים
+        "tavily_results": tavily_results,  # שלח את תוצאות Tavily בשדה נפרד
+        "notes": "\n".join(notes_parts),
         "sources": sources,
     }
 

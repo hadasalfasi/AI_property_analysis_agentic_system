@@ -9,7 +9,32 @@ def _load_config():
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
+# def _headers():
+#     key = os.getenv("OPENROUTER_API_KEY", "").strip()
+#     if not key:
+#         raise RuntimeError("Missing OPENROUTER_API_KEY")
+#     return {
+#         "Authorization": f"Bearer {key}",
+#         "HTTP-Referer": os.getenv("OR_REFERER", "http://localhost"),
+#         "X-Title": os.getenv("OR_TITLE", "Property Analysis Agentic System"),
+#         "Content-Type": "application/json",
+#     }
 def _headers():
+    cfg = _load_config()
+    provider = (cfg.get("integrations", {})
+                  .get("llm", {})
+                  .get("provider", "openrouter")).lower()
+
+    if provider == "groq":
+        key = os.getenv("GROQ_API_KEY", "").strip()
+        if not key:
+            raise RuntimeError("Missing GROQ_API_KEY")
+        return {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        }
+
+    # ברירת מחדל: OpenRouter (כמו שהיה)
     key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not key:
         raise RuntimeError("Missing OPENROUTER_API_KEY")
@@ -19,6 +44,7 @@ def _headers():
         "X-Title": os.getenv("OR_TITLE", "Property Analysis Agentic System"),
         "Content-Type": "application/json",
     }
+
 
 def _build_messages(system_prompt: str, address: str, la_data: Dict, search_notes: List[Dict]) -> list[dict]:
     return [
