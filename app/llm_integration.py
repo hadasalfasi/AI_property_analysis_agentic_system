@@ -104,8 +104,8 @@ def _make_timeout(total_seconds: int) -> httpx.Timeout:
 @traceable(name="openrouter_llm")
 def analyze_with_llm(address: str, la_data: Dict, search_notes: List[Dict], system_prompt: str) -> Dict[str, Any]:
     """
-    מבקשת מה-LLM טקסט מסוכם בודד (Markdown), ללא JSON-mode.
-    משתמשת בקיטום קלט כדי להפחית TPM, ומחזירה תמיד מילון עם formatted_text.
+    Requests a single summarized text (Markdown) from the LLM, without JSON-mode.
+    Uses input truncation to reduce TPM, and always returns a dictionary with formatted_text.
     """
     print("in analyze number 1111111111111111111111111111111")
     cfg = _load_config()
@@ -114,7 +114,7 @@ def analyze_with_llm(address: str, la_data: Dict, search_notes: List[Dict], syst
     timeout = _make_timeout(int(llm_cfg.get("request_timeout_sec", 90)))
     messages = _build_messages(system_prompt, address, la_data, search_notes)
 
-    # פלט סביר שמאפשר סיכום נקי אך לא מתנגש קשות עם TPM
+    # Reasonable output that allows for clean summarization but does not conflict severely with TPM
     max_tokens = min(int(llm_cfg.get("max_tokens", 900)), 800)
     model = llm_cfg["model"]
 
@@ -125,7 +125,6 @@ def analyze_with_llm(address: str, la_data: Dict, search_notes: List[Dict], syst
                 "messages": messages,
                 "temperature": llm_cfg.get("temperature", 0.2),
                 "max_tokens": max_tokens,
-                # חשוב: אין response_format כלל
             }
             print("in analyze number 222222222222222222222222")
             r = client.post(llm_cfg["base_url"], json=payload)
@@ -138,13 +137,12 @@ def analyze_with_llm(address: str, la_data: Dict, search_notes: List[Dict], syst
                 content = (data["choices"][0]["message"]["content"] or "").strip()
                 print(content)
                 return {
-                    "formatted_text": content,   # הסיכום כמחרוזת אחת
-                    "raw_llm_text": content,     # ← גלגל הצלה לדיבוג/קליינט
+                    "formatted_text": content,   
+                    "raw_llm_text": content,    
                     "sections": [],
                     "sources": [],
                     "warnings": [],
                 }
-            print("in analyze number 6666666666666")                    
         except httpx.HTTPStatusError as e:
             try:
                 body = e.response.text[:600] if e.response is not None else ""
@@ -155,8 +153,7 @@ def analyze_with_llm(address: str, la_data: Dict, search_notes: List[Dict], syst
             logger.warning(f"[LLM] request failed (model={model}): {e}")
 
    
-    # אם נכשל, נחזיר אינדיקציה — ה-UI יציג הודעה בהתאם
-    print("in analyze number 444444444444444444444444")
+# If we fail, we will return an indication — the UI will display a message accordingly   
     return {
         "formatted_text": "",
         "sections": [{"title": "Error", "content": "LLM request failed. See server logs."}],
@@ -168,12 +165,12 @@ def analyze_with_llm(address: str, la_data: Dict, search_notes: List[Dict], syst
 # ---------- JSON helper for planner/extractor ----------
 def _llm_json(messages: List[Dict[str, Any]], llm_cfg: dict) -> Dict[str, Any]:
     """
-    קריאת JSON "חסכונית": מודל יחיד, ניסיון יחיד, max_tokens קטן.
-    דוחפת לוגים, ומטפלת 413/429 בהחזרת שגיאה קריאה.
+    "Efficient" JSON reading: single model, single attempt, small max_tokens.
+    Pushes logs, and handles 413/429 on read error return.
     """
     timeout = _make_timeout(int(llm_cfg.get("request_timeout_sec", 90)))
     model = llm_cfg["model"]
-    max_tokens = 400  # פלט קטן לפלנר/איחוד
+    max_tokens = 400  
 
     with httpx.Client(timeout=timeout, headers=_headers()) as client:
         try:
@@ -184,7 +181,6 @@ def _llm_json(messages: List[Dict[str, Any]], llm_cfg: dict) -> Dict[str, Any]:
                 "max_tokens": max_tokens,
                 "response_format": {"type": "json_object"},
             }
-            # לוג: אורך הודעות כדי להבין עומס
             try:
                 lens = [len(m.get("content","")) for m in messages if isinstance(m, dict)]
                 logger.info(f"[LLM-JSON] model={model} max_tokens={max_tokens} msg_lens={lens}")
@@ -209,7 +205,6 @@ def _llm_json(messages: List[Dict[str, Any]], llm_cfg: dict) -> Dict[str, Any]:
             except Exception:
                 pass
             if status == 413:
-                # קלט גדול מדי – נחזיר הודעה מלוחלק ולא נפיל את התהליך
                 logger.error(f"[LLM-JSON] 413 Payload Too Large: {body}")
                 raise RuntimeError("Input too large for JSON step (413). Reduce panels/notes before retry.")
             elif status == 429:
@@ -225,12 +220,10 @@ def _llm_json(messages: List[Dict[str, Any]], llm_cfg: dict) -> Dict[str, Any]:
 
 def plan_queries(address: str, la_data: Dict) -> Dict:
     """
-    מתכנן שאילתות Tavily על סמך חסרים. שולח קלט מצומצם כדי להימנע מ-413.
+    Tavily query planner based on missing. Sends limited input to avoid 413.
     """
     cfg = _load_config(); llm_cfg = cfg["integrations"]["llm"]
-    # מצמצמים אגרסיבי לפלנר
     la_small = _shrink_panels(la_data, max_chars_per_panel=600)
-    # מסירים שדות לא קריטיים אם קיימים
     la_small.pop("permits", None)
     la_small.pop("notes", None)
 
@@ -258,7 +251,7 @@ def _pack_notes(search_notes: List[Dict]) -> str:
 
 def extract_merge(address: str, la_data: Dict, search_notes: List[Dict]) -> Dict:
     """
-    מאחד עובדות נתמכות. שולח לגרעין ה-LLM רק תמצית קצרה (Top-3 הערות, פאנלים מקוצרים).
+    Consolidates supported facts. Sends only a short summary to the LLM core (Top-3 comments, abbreviated panels).
     """
     cfg = _load_config(); llm_cfg = cfg["integrations"]["llm"]
 
@@ -280,8 +273,7 @@ def extract_merge(address: str, la_data: Dict, search_notes: List[Dict]) -> Dict
         out = _llm_json(messages, llm_cfg)
     except Exception as e:
         logger.warning(f"[extract_merge] failed: {e}")
-        return la_data  # לא נכשיל את כל הזרימה
-
+        return la_data  
     patch = (out or {}).get("patch", {}) if isinstance(out, dict) else {}
     merged = dict(la_data)
     if "zoning" in patch:
