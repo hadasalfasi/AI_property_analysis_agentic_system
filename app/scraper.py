@@ -1,10 +1,10 @@
+# -*- coding: utf-8 -*-
 from typing import Dict, List, Optional
 from loguru import logger
 from langsmith import traceable
-from app.search_integration import tavily_search
 
 from playwright.sync_api import sync_playwright, Page, Locator
-from bs4 import BeautifulSoup  # <<< חשוב: המרת HTML לטקסט
+from bs4 import BeautifulSoup
 import re
 import os
 import time
@@ -15,8 +15,7 @@ OFFICIAL_SOURCES = [
     "https://www.ladbs.org",
 ]
 
-# ========= כלי עזר להדפסות =========
-# כמה תווים/שורות להדפיס לכל טאב (ניתן לשנות ע"י משתני סביבה)
+# --- diagnostics printing limits ---
 PANEL_PRINT_MAX_CHARS = int(os.getenv("PANEL_PRINT_MAX_CHARS", "4000"))
 PANEL_PRINT_MAX_LINES = int(os.getenv("PANEL_PRINT_MAX_LINES", "120"))
 
@@ -26,7 +25,6 @@ def _print_panel(title: str, content: Optional[str]) -> None:
         print("[EMPTY]")
         print("===== END PANEL =====\n")
         return
-    # הדפסה עם הגבלה ידידותית — גם לפי תווים וגם לפי שורות
     text = (content or "").strip()
     if len(text) > PANEL_PRINT_MAX_CHARS:
         text = text[:PANEL_PRINT_MAX_CHARS] + "\n... [truncated]"
@@ -36,14 +34,12 @@ def _print_panel(title: str, content: Optional[str]) -> None:
     print(text)
     print("===== END PANEL =====\n")
 
-# ========= נרמול טקסטים =========
 def _norm(s: str) -> str:
     s = (s or "").replace("\u00A0", " ")
     s = " ".join(s.split())
     s = re.sub(r"\s*/\s*", "/", s)
     return s.strip()
 
-# ========= דיאגנוסטיקה: רשימת טאבים =========
 def _list_available_tabs(page: Page) -> List[str]:
     texts = page.locator("#divLeftInformationBar td.DataTabs").locator("a, span, div").all_inner_texts()
     cleaned = []
@@ -56,7 +52,6 @@ def _list_available_tabs(page: Page) -> List[str]:
     print(f"[TABS] {cleaned}")
     return cleaned
 
-# ========= אליאסים =========
 TAB_ALIASES = {
     "Address / Legal": [
         "Address / Legal", "Address/Legal", "Address /Legal", "Address/ Legal", "Address & Legal"
@@ -81,7 +76,6 @@ def _find_tab_locator(page: Page, canonical_name: str) -> Optional[Locator]:
         pat = pat.replace("/", r"\s*/\s*")
         patterns.append(re.compile(rf"^{pat}$", re.IGNORECASE))
 
-    # ניסיון לפי role=link
     for rx in patterns:
         try:
             loc = root.get_by_role("link", name=rx).first
@@ -89,8 +83,6 @@ def _find_tab_locator(page: Page, canonical_name: str) -> Optional[Locator]:
                 return loc
         except Exception:
             pass
-
-        # Fallback: חיפוש ידני
         containers = root.locator("td.DataTabs").locator("a, span, div")
         n = containers.count()
         for i in range(n):
@@ -103,12 +95,7 @@ def _find_tab_locator(page: Page, canonical_name: str) -> Optional[Locator]:
                 return el
     return None
 
-# ========= המרות HTML -> טקסט נקי =========
-
 def _table_to_lines(table: BeautifulSoup) -> List[str]:
-    """
-    ממיר טבלת HTML לשורות 'Label: Value'. עובד לטאב Address / Legal.
-    """
     out: List[str] = []
     rows = table.find_all("tr")
     for tr in rows:
@@ -125,35 +112,22 @@ def _table_to_lines(table: BeautifulSoup) -> List[str]:
     return out
 
 def _html_to_text(html: str) -> str:
-    """
-    ממיר HTML לטקסט קריא עם שורות חדשות.
-    """
     if not html:
         return ""
     soup = BeautifulSoup(html, "html.parser")
-
-    # להמיר <br> לשורה חדשה
     for br in soup.find_all("br"):
         br.replace_with("\n")
-
-    # אם יש טבלאות — לפרק שורה-שורה
     tables = soup.find_all("table")
     if tables:
         lines: List[str] = []
         for tb in tables:
             lines.extend(_table_to_lines(tb))
         return "\n".join(lines)
-
-    # אחרת — נשתמש ב־get_text עם מפרידי שורות
     text = soup.get_text("\n", strip=True)
-    # ניקוי רווחים כפולים ושבירות מיותרות
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
 def _clean_panel_text(value: Optional[str]) -> Optional[str]:
-    """
-    מקבלת מחרוזת (טקסט או HTML) ומחזירה טקסט נקי עם שורות מסודרות.
-    """
     if not value:
         return None
     v = value.strip()
@@ -164,14 +138,7 @@ def _clean_panel_text(value: Optional[str]) -> Optional[str]:
             return _norm(v)
     return _norm(v)
 
-
-# ========= שליפת תוכן טאב =========
-
 def _open_tab_and_get_content(page: Page, tab_text: str, timeout: int = 60000) -> Optional[str]:
-    """
-    מחזיר תמיד טקסט נקי (אם אפשר).
-    קודם מנסה inner_text; אם ריק — מנסה inner_html ואז ממיר ל־text.
-    """
     t0 = time.time()
     anchor = _find_tab_locator(page, tab_text)
     if anchor is None or anchor.count() == 0:
@@ -179,13 +146,10 @@ def _open_tab_and_get_content(page: Page, tab_text: str, timeout: int = 60000) -
         logger.warning(f"Tab not found: {tab_text}; available: {avail}; aliases: {TAB_ALIASES.get(tab_text)}")
         print(f"[WARN] Tab not found: {tab_text}; available: {avail}; aliases: {TAB_ALIASES.get(tab_text)}")
         return None
-
     try:
         anchor.scroll_into_view_if_needed()
     except Exception:
         pass
-
-    # לפתוח אם סגור (twist_closed) או "לנגוע" בקליק
     icon = anchor.locator("img").first
     try:
         src = icon.get_attribute("src") or ""
@@ -211,7 +175,6 @@ def _open_tab_and_get_content(page: Page, tab_text: str, timeout: int = 60000) -
         return None
 
     try:
-        # 1) ננסה טקסט נקי
         raw_text = (content_tr.inner_text(timeout=timeout) or "").strip()
         if raw_text:
             dt = time.time() - t0
@@ -219,7 +182,6 @@ def _open_tab_and_get_content(page: Page, tab_text: str, timeout: int = 60000) -
             print(f"[PANEL] {tab_text}: OK in {dt:.2f}s")
             return _clean_panel_text(raw_text)
 
-        # 2) אם אין טקסט — ננסה HTML ונמיר לטקסט נקי
         raw_html = (content_tr.inner_html(timeout=timeout) or "").strip()
         dt = time.time() - t0
         logger.info(f"[PANEL] {tab_text}: extracted={'True' if raw_html else 'False'} in {dt:.2f}s | preview: {raw_html[:160] if raw_html else ''}")
@@ -231,12 +193,11 @@ def _open_tab_and_get_content(page: Page, tab_text: str, timeout: int = 60000) -
         print(f"[WARN] Failed extracting content for tab {tab_text}: {e}")
         return None
 
-# ========= נקודת הכניסה לשאיבה =========
-
 @traceable(name="la_scrape")
 def scrape_la_city_planning(street_name: str, house_number: str) -> Dict:
     """
-    שליפה מזימאס לפי רחוב ומספר, ולאחר מכן שליחה לתבילי עם הפרומפטים הממוקדים
+    ZIMAS scrape by street/house number.
+    Tavily queries are handled elsewhere (planner or user-supplied).
     """
     address = f"{house_number} {street_name}, Los Angeles, CA"
     panels: Dict[str, Optional[str]] = {
@@ -250,47 +211,31 @@ def scrape_la_city_planning(street_name: str, house_number: str) -> Dict:
 
     sources: List[Dict] = []
     notes_parts: List[str] = []
-    tavily_results = []  # הוספתי את השדה tavily_results
 
-    # חפש ב-ZIMAS
+    # ZIMAS
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto("https://zimas.lacity.org/", wait_until="domcontentloaded")
 
-        # קבלת תנאים והזנת רחוב ומספר
         page.click("#btn")
         page.fill("#txtStreetName", street_name)
         page.fill("#txtHouseNumber", house_number)
         page.click("#btnSearchGo")
 
-        # להמתין לסיידבר
         page.wait_for_selector("#divLeftInformationBar", timeout=60000)
 
-        # שליפת הטאבים
         for tab_name in list(panels.keys()):
             content = _open_tab_and_get_content(page, tab_name)
-            panels[tab_name] = content  # טקסט נקי
+            panels[tab_name] = content
 
         sources.append({"name": "ZIMAS", "url": "https://zimas.lacity.org/"})
         browser.close()
 
-    # חיפוש נוסף ב-Tavily
-    try:
-        logger.info("Performing Tavily search for additional context.")
-        search_results = tavily_search(address) or []
-        for result in search_results:
-            tavily_results.append(result)  # שמור את תוצאות Tavily בשדה tavily_results
-        # sources.append({"name": "TAVILY", "url": "https://tavily.com"})
-    except Exception as e:
-        logger.warning(f"Tavily search failed: {e}")
-    print(tavily_results)
-    print("+++++++++++++++++++++++++")
     return {
         "address": address,
-        "panels": panels,  # הטקסטים מכל הטאבים
-        "tavily_results": tavily_results,  # שלח את תוצאות Tavily בשדה נפרד
+        "panels": panels,
+        "tavily_results": [],  # kept for compatibility; user/agent search happens later
         "notes": "\n".join(notes_parts),
         "sources": sources,
     }
-
